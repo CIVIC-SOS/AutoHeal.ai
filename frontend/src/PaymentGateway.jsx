@@ -5,11 +5,15 @@ export default function PaymentGateway({ product, onBack }) {
   const [isSuccess, setIsSuccess] = useState(false);
 
   // === Payment handler — fires the real backend SSE stream silently ===
+  // VITE_API_BASE_URL is set on Vercel to point to the deployed backend.
+  // In local dev it is empty, so relative '/api' is used (Vite proxy handles it).
+  const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
+
   const handlePayment = (e) => {
     e.preventDefault();
     setIsProcessing(true);
 
-    const eventSource = new EventSource('/api/checkout-stream');
+    const eventSource = new EventSource(`${API_BASE}/api/checkout-stream`);
     const channel = new BroadcastChannel('autoheal_stream');
 
     // Broadcast that a simulation started so the dashboard can reset its state

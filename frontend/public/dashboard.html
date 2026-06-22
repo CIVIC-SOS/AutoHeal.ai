@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AutoHeal.ai | Control Panel</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.23.6/babel.min.js"></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-json.min.js"></script>
+
+  <style>
+    body { background-color: #000000; color: #e4e4e7; font-family: 'Inter', sans-serif; }
+    .log-enter { animation: fadeIn 0.4s ease-out forwards; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 8px rgba(255,255,255,0.1); } 50% { box-shadow: 0 0 20px rgba(255,255,255,0.3); } }
+    .pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #09090b; }
+    ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+    .diff-added { background: rgba(34,197,94,0.1); border-left: 3px solid #22c55e; }
+    .diff-removed { background: rgba(239,68,68,0.1); border-left: 3px solid #ef4444; }
+  </style>
+</head>
+
+<body class="h-screen flex flex-col overflow-hidden">
+  <div id="root" class="h-full"></div>
+
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useRef } = React;
+
+    // ── Diff Pane Component ──
+    function DiffPane({ title, leftLabel, rightLabel, leftContent, rightContent, language }) {
+      const leftRef = useRef(null);
+      const rightRef = useRef(null);
+
+      useEffect(() => {
+        if (window.Prism) Prism.highlightAll();
+      }, [leftContent, rightContent]);
+
+      if (!leftContent && !rightContent) return null;
+
+      return (
+        <div className="flex flex-col h-full">
+          <div className="flex border-b border-zinc-800">
+            <div className="flex-1 px-3 py-1.5 text-xs font-mono text-red-400 bg-red-950/20 border-r border-zinc-800 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-red-500 inline-block"></span>{leftLabel}
+            </div>
+            <div className="flex-1 px-3 py-1.5 text-xs font-mono text-emerald-400 bg-emerald-950/20 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>{rightLabel}
+            </div>
+          </div>
+          <div className="flex flex-1 overflow-hidden">
+            <div ref={leftRef} className="flex-1 overflow-auto border-r border-zinc-800 p-3">
+              <pre className="!m-0 !bg-transparent text-xs"><code className={`language-${language}`}>{leftContent || '// No data'}</code></pre>
+            </div>
+            <div ref={rightRef} className="flex-1 overflow-auto p-3">
+              <pre className="!m-0 !bg-transparent text-xs"><code className={`language-${language}`}>{rightContent || '// No data'}</code></pre>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Main App ──
+    function App() {
+      const [logs, setLogs] = useState([]);
+      const [isProcessing, setIsProcessing] = useState(false);
+      const [status, setStatus] = useState("idle");
+
+      // Diff data
+      const [oldSchema, setOldSchema] = useState("");
+      const [newSchema, setNewSchema] = useState("");
+      const [oldCode, setOldCode] = useState("");
+      const [newCode, setNewCode] = useState("");
+      const [sourceFile, setSourceFile] = useState("");
+      const [healedPayload, setHealedPayload] = useState(null);
+
+      // Diff tab
+      const [diffTab, setDiffTab] = useState("schema");
+
+      // PR state
+      const [isMerging, setIsMerging] = useState(false);
+      const [mergeStatus, setMergeStatus] = useState(null);
+
+      // Incident history
+      const [incidents, setIncidents] = useState([]);
+      const [showHistory, setShowHistory] = useState(false);
+
+      const terminalRef = useRef(null);
+
+      useEffect(() => {
+        if (terminalRef.current) terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
+      }, [logs]);
+
+      useEffect(() => {
+        if (window.Prism) Prism.highlightAll();
+      }, [oldCode, newCode, oldSchema, newSchema, diffTab]);
+
+      // --- Broadcast Channel Listener ---
+      useEffect(() => {
+        const channel = new BroadcastChannel('autoheal_stream');
+        channel.onmessage = (event) => {
+          if (event.data.type === 'simulation_start') {
+            setLogs([]); setOldSchema(""); setNewSchema("");
+            setOldCode(""); setNewCode(""); setSourceFile("");
+            setHealedPayload(null); setMergeStatus(null);
+            setIsProcessing(true); setStatus("idle");
+          } else if (event.data.type === 'stream_data') {
+            const data = event.data.data;
+            if (data.step === 'done') {
+              setIsProcessing(false);
+              setStatus("success");
+              fetchIncidents();
+              return;
+            }
+            setLogs(prev => [...prev, data]);
+            if (data.step === 'error') setStatus("error");
+            if (data.step === 'aegis_init') setStatus("healing");
+            if (data.old_schema) setOldSchema(data.old_schema);
+            if (data.new_schema) setNewSchema(data.new_schema);
+            if (data.old_code) setOldCode(data.old_code);
+            if (data.new_code) setNewCode(data.new_code);
+            if (data.source_file) setSourceFile(data.source_file);
+            if (data.healed_payload) setHealedPayload(data.healed_payload);
+          }
+        };
+        return () => channel.close();
+      }, []);
+
+      const fetchIncidents = async () => {
+        try {
+          const res = await fetch('/api/incidents');
+          const data = await res.json();
+          setIncidents(data);
+        } catch(e) { console.error(e); }
+      };
+
+      const handleMergePR = async () => {
+        setIsMerging(true);
+        try {
+          const response = await fetch('/api/approve-pr', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              code: newCode,
+              source_file: sourceFile || "integrations/stripe_integration.py"
+            })
+          });
+          const data = await response.json();
+          if (response.ok) {
+            setMergeStatus({ type: 'success', text: 'PR opened successfully!', url: data.pr_url });
+          } else {
+            setMergeStatus({ type: 'error', text: data.message || 'Failed to create PR.' });
+          }
+        } catch (error) {
+          setMergeStatus({ type: 'error', text: 'Server error. Is the backend running?' });
+        } finally { setIsMerging(false); }
+      };
+
+      const getStatusColor = () => {
+        if (status === "error") return "text-red-400 border-red-500 bg-red-950/50";
+        if (status === "healing") return "text-amber-400 border-amber-500 bg-amber-950/50";
+        if (status === "success") return "text-emerald-400 border-emerald-500 bg-emerald-950/50";
+        return "text-zinc-400 border-zinc-800 bg-zinc-900/50";
+      };
+
+      const hasDiffs = oldSchema || newSchema || oldCode || newCode;
+
+      return (
+        <div className="h-full flex flex-col bg-black">
+          {/* Header */}
+          <header className="border-b border-zinc-900 bg-black px-6 py-3 flex justify-between items-center">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded bg-zinc-800 border border-zinc-700 flex items-center justify-center font-bold text-white text-sm shadow-[0_0_15px_rgba(255,255,255,0.05)]">A</div>
+              <h1 className="text-lg font-bold text-white tracking-tight">AutoHeal.ai Control Panel</h1>
+              <span className="text-xs text-zinc-500 font-mono ml-2">v2.0</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <button onClick={() => { setShowHistory(!showHistory); if(!showHistory) fetchIncidents(); }}
+                className="text-xs text-zinc-400 hover:text-white border border-zinc-800 hover:border-zinc-600 px-3 py-1.5 rounded transition-colors bg-zinc-900/50">
+                {showHistory ? 'Hide' : 'Show'} Incident Log
+              </button>
+              <div className={`px-4 py-1.5 rounded-full border text-xs font-medium transition-colors ${getStatusColor()}`}>
+                {status === "idle" && "System Standby"}
+                {status === "error" && "Schema Drift Detected"}
+                {status === "healing" && "Agentic Loop Active"}
+                {status === "success" && "Pipeline Restored"}
+              </div>
+            </div>
+          </header>
+
+          <div className="flex-1 flex overflow-hidden">
+            {/* Left Panel: Telemetry + Diffs */}
+            <div className="flex-1 flex flex-col overflow-hidden">
+              {/* Terminal */}
+              <div className={`${hasDiffs ? 'h-[45%]' : 'flex-1'} flex flex-col border-b border-zinc-900 bg-black overflow-hidden`}>
+                <div className="bg-zinc-950 px-4 py-2 border-b border-zinc-900 flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full bg-zinc-700"></div>
+                  <div className="w-2.5 h-2.5 rounded-full bg-zinc-700"></div>
+                  <div className="w-2.5 h-2.5 rounded-full bg-zinc-700"></div>
+                  <span className="ml-2 text-xs font-mono text-zinc-500">autoheal-agent.log</span>
+                  {healedPayload && (
+                    <span className="ml-auto text-xs text-emerald-400/80 font-mono">
+                      Healed Payload: {JSON.stringify(healedPayload)}
+                    </span>
+                  )}
+                </div>
+                <div ref={terminalRef} className="flex-1 p-4 overflow-y-auto font-mono text-xs leading-relaxed space-y-2 bg-[#050505]">
+                  {logs.length === 0 && <p className="text-zinc-600 italic">Waiting for telemetry...</p>}
+                  {logs.map((log, i) => (
+                    <div key={i} className={`log-enter ${log.step.includes('error') ? 'text-red-400/90' : log.step.includes('success') ? 'text-emerald-400/90' : log.step.includes('tool') ? 'text-zinc-400' : 'text-zinc-300'}`}>
+                      <span className="text-zinc-600 mr-2">[{new Date().toLocaleTimeString()}]</span>
+                      {log.msg}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Diff Viewer */}
+              {hasDiffs && (
+                <div className="h-[55%] flex flex-col bg-black overflow-hidden log-enter">
+                  {/* Diff Tab Bar */}
+                  <div className="bg-zinc-950 px-4 py-2 border-b border-zinc-900 flex justify-between items-center">
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => setDiffTab("schema")}
+                        className={`px-3 py-1 rounded text-xs font-medium transition-colors ${diffTab === 'schema' ? 'bg-zinc-200 text-black' : 'text-zinc-500 hover:text-zinc-300'}`}>
+                        Schema Diff
+                      </button>
+                      <button onClick={() => setDiffTab("code")}
+                        className={`px-3 py-1 rounded text-xs font-medium transition-colors ${diffTab === 'code' ? 'bg-zinc-200 text-black' : 'text-zinc-500 hover:text-zinc-300'}`}>
+                        Code Diff
+                      </button>
+                      {sourceFile && <span className="ml-3 text-xs font-mono text-zinc-600">Target: {sourceFile}</span>}
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {mergeStatus && (
+                        <span className={`text-xs ${mergeStatus.type === 'error' ? 'text-red-400' : 'text-emerald-400'}`}>
+                          {mergeStatus.text} {mergeStatus.url && <a href={mergeStatus.url} target="_blank" className="underline ml-1">View PR</a>}
+                        </span>
+                      )}
+                      <button onClick={handleMergePR}
+                        disabled={isMerging || !newCode || mergeStatus?.type === 'success'}
+                        className="bg-emerald-600/90 hover:bg-emerald-500 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed text-white text-xs px-3 py-1.5 rounded transition-colors font-medium">
+                        {isMerging ? 'Pushing...' : 'Approve & Open PR'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Diff Content */}
+                  <div className="flex-1 overflow-hidden bg-[#050505]">
+                    {diffTab === "schema" && (
+                      <DiffPane
+                        leftLabel="Old Schema (Deprecated)"
+                        rightLabel="New Schema (Required)"
+                        leftContent={oldSchema}
+                        rightContent={newSchema}
+                        language="json"
+                      />
+                    )}
+                    {diffTab === "code" && (
+                      <DiffPane
+                        leftLabel="Old Code (format_payload)"
+                        rightLabel="New Code (transform_payload)"
+                        leftContent={oldCode}
+                        rightContent={newCode}
+                        language="python"
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Incident History Sidebar */}
+            {showHistory && (
+              <div className="w-[300px] border-l border-zinc-900 bg-zinc-950 flex flex-col overflow-hidden log-enter">
+                <div className="px-4 py-3 border-b border-zinc-900 bg-black">
+                  <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Incident History</h2>
+                </div>
+                <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                  {incidents.length === 0 && <p className="text-xs text-zinc-600 italic">No incidents recorded yet.</p>}
+                  {incidents.map((inc, i) => (
+                    <div key={inc.id} className={`p-3 rounded border text-xs ${inc.status === 'healed' ? 'border-emerald-900/50 bg-emerald-950/10' : inc.status === 'failed' ? 'border-red-900/50 bg-red-950/10' : 'border-zinc-800 bg-zinc-900/30'}`}>
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="font-semibold text-zinc-300">Incident #{inc.id}</span>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${inc.status === 'healed' ? 'bg-emerald-500/10 text-emerald-400' : inc.status === 'failed' ? 'bg-red-500/10 text-red-400' : 'bg-amber-500/10 text-amber-400'}`}>
+                          {inc.status}
+                        </span>
+                      </div>
+                      <p className="text-zinc-500 truncate">{inc.error_message}</p>
+                      <p className="text-zinc-600 mt-1">{inc.created_at}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+
+</html>
