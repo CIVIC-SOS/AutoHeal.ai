@@ -6,6 +6,7 @@ Mock Vendor API (Simulates Stripe-like 3rd Party Service)
 from fastapi import FastAPI, HTTPException, Request
 import uvicorn
 import sys
+import os
 
 # Avoid unicode encode errors on Windows
 if hasattr(sys.stdout, 'reconfigure'):
@@ -61,4 +62,4 @@ async def process_payment(request: Request):
 if __name__ == "__main__":
     # Runs the vendor API on port 8001
     print("Starting Mock Vendor API on port 8000...")
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))

@@ -220,4 +220,4 @@ async def get_incident(incident_id: int):
 if __name__ == "__main__":
     import uvicorn
     print("Starting AutoHeal.ai Dashboard Server on port 8001...")
-    uvicorn.run(app, host="127.0.0.1", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8001)))
