@@ -1,8 +1,5 @@
 """
-AutoHeal.ai - Dashboard Server & SSE Telemetry Stream
-- Streams LangGraph execution steps (diffs, schemas, code) via SSE
-- GitOps: Dynamic PR file targeting via stack trace introspection
-- Audit Log API: Exposes incident history from SQLite
+Dashboard server and SSE telemetry stream.
 """
 import os
 import json
@@ -26,7 +23,7 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
 @app.get("/")
@@ -38,12 +35,9 @@ def serve_dashboard():
 
 @app.get("/api/checkout-stream")
 async def checkout_stream():
-    """
-    Streams the LangGraph execution steps to the React frontend
-    in real-time using Server-Sent Events (SSE).
-    """
+    """ Stream execution steps to the frontend via SSE. """
     async def event_generator():
-        # 1. Simulate the Product Backend failure
+
         yield f"data: {json.dumps({'step': 'system', 'msg': '[Product Backend] User clicked Checkout. Initiating payment to Vendor API...'})}\n\n"
         await asyncio.sleep(1)
 
@@ -55,19 +49,19 @@ async def checkout_stream():
             "'total_amount' and 'user_uuid'."
         )
 
-        # Introspect caller file for dynamic PR targeting
+        # fetch caller file path
         source_file = "backend/product_backend.py"
 
-        # Create an incident in the audit log
+
         incident_id = aegis_db.create_incident(target_url, old_cart_payload, error_details, source_file)
 
-        # Stream the Crash
+
         yield f"data: {json.dumps({'step': 'error', 'msg': '[HTTP 400] Vendor schema drift detected.', 'payload': old_cart_payload})}\n\n"
         await asyncio.sleep(1.5)
 
         yield f"data: {json.dumps({'step': 'aegis_init', 'msg': '[AutoHeal.ai] Intercepted crash. Delegating to LangGraph Agent...'})}\n\n"
 
-        # 2. Initialize the LangGraph State Machine
+        # initialize the state machine
         graph = build_aegis_graph()
         initial_state = {
             "original_payload": old_cart_payload,
@@ -87,7 +81,7 @@ async def checkout_stream():
             "incident_id": incident_id,
         }
 
-        # 3. Stream the LangGraph nodes executing in real-time
+        # stream active nodes
         for event in graph.stream(initial_state):
             for node_name, state_update in event.items():
                 if node_name == "fetch_docs":
@@ -118,9 +112,7 @@ async def checkout_stream():
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-# ------------------------------------------------------------------
-# GitOps: Approve & Create PR
-# ------------------------------------------------------------------
+
 class PRRequest(BaseModel):
     code: str
     source_file: str = "integrations/stripe_integration.py"
@@ -128,17 +120,14 @@ class PRRequest(BaseModel):
 
 @app.post("/api/approve-pr")
 async def approve_and_create_pr(request: PRRequest):
-    """
-    Takes the AI generated code, pushes it to a new branch, and opens a Pull Request.
-    Uses the dynamic source_file from stack trace introspection.
-    """
+    """ Push AI changes to a new branch and open a PR. """
     github_token = os.getenv("GITHUB_TOKEN")
     repo_name = os.getenv("GITHUB_REPO_NAME", "yourusername/autoheal-test-repo")
 
     if not github_token:
         return JSONResponse({"error": "GitHub token not configured in .env"}, status_code=500)
 
-    # Find the latest incident for PR logging
+    # find latest incident
     incidents = aegis_db.get_all_incidents(limit=1)
     incident_id = incidents[0]["id"] if incidents else None
 
@@ -151,7 +140,7 @@ async def approve_and_create_pr(request: PRRequest):
         branch_name = f"autoheal-fix-{os.urandom(4).hex()}"
         repo.create_git_ref(ref=f"refs/heads/{branch_name}", sha=main_branch.commit.sha)
 
-        # Use the dynamic file path from stack trace introspection
+
         file_path = request.source_file
 
         try:
@@ -185,7 +174,7 @@ async def approve_and_create_pr(request: PRRequest):
             base="main"
         )
 
-        # Log to audit DB
+        # log PR creation
         if incident_id:
             aegis_db.log_pr(incident_id, branch_name, file_path, pr.html_url, "opened")
 
@@ -198,19 +187,17 @@ async def approve_and_create_pr(request: PRRequest):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
-# ------------------------------------------------------------------
-# Audit Log API
-# ------------------------------------------------------------------
+
 @app.get("/api/incidents")
 async def list_incidents():
-    """Returns the most recent incidents from the audit log."""
+    """ Fetch recent incidents. """
     incidents = aegis_db.get_all_incidents(limit=50)
     return JSONResponse(incidents)
 
 
 @app.get("/api/incidents/{incident_id}")
 async def get_incident(incident_id: int):
-    """Returns full detail for a single incident including agent steps and PR history."""
+    """ Fetch detailed incident history. """
     detail = aegis_db.get_incident_detail(incident_id)
     if not detail:
         return JSONResponse({"error": "Incident not found"}, status_code=404)

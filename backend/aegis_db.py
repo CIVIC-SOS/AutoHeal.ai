@@ -1,5 +1,5 @@
 """
-AutoHeal.ai - Audit Log (SQLite Database Module)
+Audit log database module.
 Tracks all API failures, agent remediation steps, code diffs, and PR history.
 """
 import sqlite3
@@ -15,7 +15,7 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "aegis_audit.db")
 
 
 def get_connection():
-    """Returns a connection to the SQLite database, creating tables if needed."""
+    """ Initialize database connection. """
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -24,7 +24,7 @@ def get_connection():
 
 
 def _create_tables(conn: sqlite3.Connection):
-    """Creates the audit log tables if they do not exist."""
+    """ Create necessary tables. """
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS incidents (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,11 +65,8 @@ def _create_tables(conn: sqlite3.Connection):
     conn.commit()
 
 
-# ------------------------------------------------------------------
-# Incident CRUD
-# ------------------------------------------------------------------
 def create_incident(target_url: str, original_payload: dict, error_message: str, source_file: str = None) -> int:
-    """Creates a new incident row and returns its ID."""
+    """ Create a new incident. """
     conn = get_connection()
     cur = conn.execute(
         "INSERT INTO incidents (target_url, original_payload, error_message, source_file) VALUES (?, ?, ?, ?)",
@@ -83,16 +80,13 @@ def create_incident(target_url: str, original_payload: dict, error_message: str,
 
 
 def update_incident_status(incident_id: int, status: str):
-    """Updates the status of an incident (open / healed / failed)."""
+    """ Update incident status. """
     conn = get_connection()
     conn.execute("UPDATE incidents SET status = ? WHERE id = ?", (status, incident_id))
     conn.commit()
     conn.close()
 
 
-# ------------------------------------------------------------------
-# Agent Step Logging
-# ------------------------------------------------------------------
 def log_agent_step(
     incident_id: int,
     step_name: str,
@@ -106,7 +100,7 @@ def log_agent_step(
     verification: str = None,
     error_detail: str = None
 ):
-    """Logs a single agent step (diagnose, sandbox, verify) against an incident."""
+    """ Log agent action steps. """
     conn = get_connection()
     conn.execute(
         """INSERT INTO agent_steps
@@ -126,11 +120,8 @@ def log_agent_step(
     conn.close()
 
 
-# ------------------------------------------------------------------
-# PR History Logging
-# ------------------------------------------------------------------
 def log_pr(incident_id: int, branch_name: str, target_file: str, pr_url: str = None, status: str = "pending"):
-    """Logs a Pull Request creation event against an incident."""
+    """ Log PR creation. """
     conn = get_connection()
     conn.execute(
         "INSERT INTO pr_history (incident_id, branch_name, target_file, pr_url, status) VALUES (?, ?, ?, ?, ?)",
@@ -140,11 +131,8 @@ def log_pr(incident_id: int, branch_name: str, target_file: str, pr_url: str = N
     conn.close()
 
 
-# ------------------------------------------------------------------
-# Query helpers (for the dashboard API)
-# ------------------------------------------------------------------
 def get_all_incidents(limit: int = 50) -> list[dict]:
-    """Returns the most recent incidents."""
+    """ Fetch recent incidents. """
     conn = get_connection()
     rows = conn.execute(
         "SELECT * FROM incidents ORDER BY created_at DESC LIMIT ?", (limit,)
@@ -154,7 +142,7 @@ def get_all_incidents(limit: int = 50) -> list[dict]:
 
 
 def get_incident_detail(incident_id: int) -> dict:
-    """Returns a full incident with its agent steps and PR history."""
+    """ Fetch detailed incident history. """
     conn = get_connection()
     incident = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
     if not incident:
@@ -175,3 +163,4 @@ def get_incident_detail(incident_id: int) -> dict:
         "steps": [dict(s) for s in steps],
         "prs": [dict(p) for p in prs],
     }
+
