@@ -54,19 +54,35 @@ flowchart TD
 
 ```
 AutoHeal.ai/
-├── backend/
-│   ├── aegis_agent.py      # LangGraph agent: 4-node state machine (fetch_docs → diagnose → sandbox → verify)
-│   ├── aegis_db.py          # SQLite audit log module (incidents, agent_steps, pr_history tables)
-│   ├── server.py            # FastAPI dashboard server, SSE telemetry stream, GitOps PR endpoint
-│   ├── dashboard.html       # React control plane frontend (split-pane diff viewer, incident log)
-│   ├── product_backend.py   # Consumer app simulator — catches 400 errors and delegates to the agent
-│   ├── mock_vendor.py       # Mock third-party API with strict schema validation + dry-run support
-│   ├── test_llm.py          # Quick Gemini API connectivity check
-│   ├── .env.example         # Template for environment secrets
-│   └── .env                 # Your local secrets (git-ignored)
+├── README.md
 ├── requirements.txt         # Python dependencies
+├── start.sh                 # Convenience script to start the stack
 ├── .gitignore
-└── README.md
+├── backend/
+│   ├── aegis_agent.py       # LangGraph agent: 4-node state machine (fetch_docs → diagnose → sandbox → verify)
+│   ├── aegis_db.py          # SQLite audit log module (incidents, agent_steps, pr_history tables)
+│   ├── dashboard.html       # React control plane frontend (split-pane diff viewer, incident log)
+│   ├── logic.md             # Agent behavior and workflow notes
+│   ├── mock_vendor.py       # Mock third-party API with strict schema validation + dry-run support
+│   ├── product_backend.py   # Consumer app simulator — catches 400 errors and delegates to the agent
+│   ├── server.py            # FastAPI dashboard server, SSE telemetry stream, GitOps PR endpoint
+│   ├── test_llm.py          # Quick Gemini API connectivity check
+│   └── .env.example         # Template for environment secrets
+└── frontend/
+    ├── .gitignore           # Frontend-only ignore rules
+    ├── index.html           # Vite entry document for the React app
+    ├── package-lock.json    # Locked frontend dependency versions
+    ├── package.json         # Frontend scripts and dependencies
+    ├── vercel.json          # Vercel deployment configuration
+    ├── vite.config.js       # Vite build and dev-server config
+    ├── public/
+    │   └── dashboard.html   # Static dashboard shell used by the frontend
+    └── src/
+        ├── App.jsx          # Root React component
+        ├── index.css        # Global styles and layout tokens
+        ├── main.jsx         # React bootstrap entry point
+        ├── PaymentGateway.jsx # Payment workflow UI and API wiring
+        └── ProductSelection.jsx # Product selection UI
 ```
 
 ---
@@ -145,6 +161,49 @@ python server.py
 ### 4. Open the dashboard
 
 Navigate to **http://127.0.0.1:8001/** in your browser.
+
+---
+
+## MVP Demo
+
+The following sequence of images demonstrates AutoHeal.ai in action, from detecting an API failure in a mock SaaS application to autonomously generating and proposing a fix.
+
+### 1. The Consumer Application (Mock SaaS)
+
+The user interacts with our mock SaaS dashboard, preparing to make a payment.
+![mock saas dashboard](/images/f1.png)
+
+When the user navigates to the payment gateway, everything appears normal.
+![mock saas payment gateway](/images/f2.png)
+
+However, when the user attempts to process the payment, a sudden HTTP 400 Schema Drift Error occurs. This happens because the vendor API schema has changed unexpectedly without our knowledge.
+![mock saas payment gateway ERROR](/images/f3.png)
+
+### 2. AutoHeal.ai Interception and Diagnosis
+
+Behind the scenes, AutoHeal.ai intercepts this failure. Here is the dashboard server before the error occurs, monitoring the system:
+![dashboard server before api error](/images/b1.png)
+
+Once the HTTP 400 error is caught, the LangGraph agent powered by LLM immediately steps in to diagnose the drift. It fetches the new vendor OpenAPI documentation and analyzes the differences.
+![dashboard server while llm detects and diagnosing the error](/images/b2.png)
+
+### 3. Autonomous Patch Generation and Review
+
+AutoHeal.ai successfully identifies the schema mismatch. It generates a detailed report outlining the exact difference between the old and new schemas, streaming the findings to the dashboard for maintainer review.
+![dashboard server after llm finding the error and reporting the difference in schema and waiting for maintainer approval](/images/b3.png)
+
+Alongside the schema diff, it also provides the required code changes (`transform_payload` function) to heal the integration. The system halts and waits for the maintainer to verify the dry-run results and approve the code changes.
+![dashboard server after llm finding the error and reporting the difference in code, waiting for maintainer to open github for PR approval](/images/b4.png)
+
+### 4. GitOps Workflow: PR Creation
+
+The maintainer reviews the changes in the dashboard and clicks "Approve & Open PR". AutoHeal.ai automatically creates a new branch and pushes a Pull Request to the GitHub repository containing the fix.
+![github webpage waiting for maintainer approval](/images/b5.png)
+
+### 5. Seamless Recovery
+
+With the PR merged and the new code deployed, the consumer application successfully processes the payment. The integration is healed with zero downtime for the end user!
+![mock saas payment success](/images/f4.png)
 
 ---
 
